@@ -4,7 +4,7 @@ This repository contains the processing pipeline and visualization suite for flo
 
 ## Feature Summary
 
-The Western Flyer flow-through codebase is a modular processing pipeline for the ship's Sea-Bird SBE 21 SeaCAT thermosalinograph (S/N 3507). It provides a standardized framework for raw hex data ingestion, position and time reconstruction, quality flagging, and interactive visualization. It mirrors the layout of the sister project [westernflyer_cruise_ctd](../westernflyer_cruise_ctd).
+The Western Flyer flow-through codebase is a modular processing pipeline for the ship's Sea-Bird SBE 21 SeaCAT thermosalinograph (S/N 3507). It provides a standardized framework for raw hex data ingestion, position and time reconstruction, quality flagging, and interactive visualization. It mirrors the layout of the sister project [westernflyer_cruise_ctd](https://github.com/joeacarlisle/westernflyer_cruise_ctd).
 
 * **Raw .hex Processing:** The pipeline starts from raw Seasave `.hex` files. It parses both 40- and 46-character row formats, skips malformed lines, decodes NMEA latitude/longitude and depth, and builds UTC timestamps.
 * **SBE Data Processing .cnv Integration:** The Sea-Bird Scientific Python toolkit does not support the SBE 21, so the pipeline does not convert counts itself. When SBE Data Processing `.cnv` files are present they are matched to the `.hex` scans and add `temp_c`, `cond_sm` and `sal_psu` (plus `fluor_mgm3`, `cstar_atten_m` and `cstar_trans_pct` when those variables are in the `.cnv`). Files without a `.cnv` are loaded as raw counts and listed in the log.
@@ -259,7 +259,7 @@ Alternatively, call `main.py` directly for full control. The following are examp
 * **Windows:** `scripts\windows\flowthru_dashboard.bat`
 * **Linux / macOS:** `./scripts/linux_mac/flowthru_dashboard.sh`
 
-The flow-through dashboard starts on port 5007 at `http://localhost:5007`. The CTD dashboard in [westernflyer_cruise_ctd](../westernflyer_cruise_ctd) starts on port 5006, so the two applications can run side by side.
+The flow-through dashboard starts on port 5007 at `http://localhost:5007`. The CTD dashboard in [westernflyer_cruise_ctd](https://github.com/joeacarlisle/westernflyer_cruise_ctd) starts on port 5006, so the two applications can run side by side.
 
 Or directly: `panel serve flowthru_holoviews.py --port 5007 --show`. The dashboard lists `2025_Baja` first and opens on it; set `WF_DEFAULT_CRUISE` to open on a different cruise.
 
