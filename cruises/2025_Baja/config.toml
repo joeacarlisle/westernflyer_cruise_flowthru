@@ -1,0 +1,38 @@
+# Western Flyer flow-through (SBE 21) -- cruise processing configuration
+# Cruise ID comes from the directory name (cruises/<cruise_id>/), not this file.
+
+[metadata]
+# Informational only -- not read by the pipeline
+TSG_SERIAL = 3507
+INSTRUMENT = "SBE 21 SeaCAT thermosalinograph"
+
+[timing]
+# Scan time = start time + scan_index * interval.
+# Leave SAMPLE_INTERVAL_S empty to use "Real-Time Sample Interval" from each header (3 s).
+SAMPLE_INTERVAL_S = ""
+# "nmea" = header "NMEA UTC (Time)" (GPS); "system" = header "System UTC" (PC clock).
+# In baja2025 the PC clock runs ~7.5 min ahead of NMEA, so nmea is the default.
+TIME_SOURCE = "nmea"
+
+[qc]
+# Implied ship speed (m/s) above which a scan is flagged (qc_flag bit 2).
+# Speed is measured between positions SPEED_LAG_SCANS apart because Seasave
+# latches the last NMEA fix, so adjacent scans often repeat a position.
+MAX_SPEED_MS = 10.0
+SPEED_LAG_SCANS = 10
+# Running-median spike test on ch0/ch1 counts (qc_flag bit 1). PROVISIONAL:
+# tune once the channels are identified and converted.
+SPIKE_WINDOW = 9
+SPIKE_COUNTS = 300
+# First scan must be within this many degrees of the header NMEA position.
+POSITION_TOL_DEG = 1.0
+
+# Converted-value QC (used for scans that have values from an SBE Data Processing .cnv).
+# Spike test: temperature or salinity differing from its running median (SPIKE_WINDOW scans)
+# by more than these limits sets qc_flag bit 1 (replaces the count-based test for those scans).
+SPIKE_TEMP_C = 0.2
+SPIKE_SAL_PSU = 0.5
+# Implausible converted values set qc_flag bit 16 (cell likely not flowing seawater).
+MIN_SALINITY_PSU = 20.0
+MIN_TEMP_C = -2.0
+MAX_TEMP_C = 40.0

@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SBE_InstrumentConfiguration SB_ConfigCTD_FileVersion="7.26.4.0" >
+  <Instrument Type="4" >
+    <Name>SBE 21 Seacat Thermosalinograph</Name>
+    <!-- Remote temperature: 0 = none, 1 = SBE 3, 2 = SBE 38. -->
+    <RemoteTemperature>2</RemoteTemperature>
+    <ExternalVoltageChannels>4</ExternalVoltageChannels>
+    <SampleIntervalSeconds>3</SampleIntervalSeconds>
+    <NmeaPositionDataAdded>1</NmeaPositionDataAdded>
+    <NmeaDepthDataAdded>1</NmeaDepthDataAdded>
+    <NmeaTimeAdded>0</NmeaTimeAdded>
+    <NmeaDeviceConnectedToPC>1</NmeaDeviceConnectedToPC>
+    <ScanTimeAdded>0</ScanTimeAdded>
+    <SensorArray Size="7" >
+      <Sensor index="0" SensorID="55" >
+        <TemperatureSensor SensorID="55" >
+          <SerialNumber>3507</SerialNumber>
+          <CalibrationDate>05-Jul-23</CalibrationDate>
+          <UseG_J>1</UseG_J>
+          <A>0.00000000e+000</A>
+          <B>0.00000000e+000</B>
+          <C>0.00000000e+000</C>
+          <D>0.00000000e+000</D>
+          <F0_Old>0.000</F0_Old>
+          <G>4.24982344e-003</G>
+          <H>6.14837207e-004</H>
+          <I>1.67128999e-005</I>
+          <J>1.08536087e-006</J>
+          <F0>1000.000</F0>
+          <Slope>1.00000000</Slope>
+          <Offset>0.0000</Offset>
+        </TemperatureSensor>
+      </Sensor>
+      <Sensor index="1" SensorID="3" >
+        <ConductivitySensor SensorID="3" >
+          <SerialNumber>3507</SerialNumber>
+          <CalibrationDate>05-Jul-23</CalibrationDate>
+          <UseG_J>1</UseG_J>
+          <!-- Cell const and series R are applicable only for wide range sensors. -->
+          <SeriesR>0.0000</SeriesR>
+          <CellConst>2000.0000</CellConst>
+          <ConductivityType>0</ConductivityType>
+          <Coefficients equation="0" >
+            <A>0.00000000e+000</A>
+            <B>0.00000000e+000</B>
+            <C>0.00000000e+000</C>
+            <D>0.00000000e+000</D>
+            <M>0.0</M>
+            <CPcor>-9.57000000e-008</CPcor>
+          </Coefficients>
+          <Coefficients equation="1" >
+            <G>-4.17730188e+000</G>
+            <H>4.93714844e-001</H>
+            <I>-3.01754080e-004</I>
+            <J>4.08334552e-005</J>
+            <CPcor>-9.57000000e-008</CPcor>
+            <CTcor>3.2500e-006</CTcor>
+            <!-- WBOTC not applicable unless ConductivityType = 1. -->
+            <WBOTC>0.00000000e+000</WBOTC>
+          </Coefficients>
+          <Slope>1.00000000</Slope>
+          <Offset>0.00000</Offset>
+        </ConductivitySensor>
+      </Sensor>
+      <Sensor index="2" SensorID="56" >
+        <TemperatureSensor SensorID="56" >
+          <SerialNumber></SerialNumber>
+          <CalibrationDate></CalibrationDate>
+        </TemperatureSensor>
+      </Sensor>
+      <Sensor index="3" SensorID="71" >
+        <WET_LabsCStar SensorID="71" >
+          <SerialNumber>2515</SerialNumber>
+          <CalibrationDate>25-Apr-2024</CalibrationDate>
+          <M>22.3470</M>
+          <B>-1.5870</B>
+          <PathLength>0.250</PathLength>
+        </WET_LabsCStar>
+      </Sensor>
+      <Sensor index="4" SensorID="27" >
+        <NotInUse SensorID="27" >
+          <SerialNumber></SerialNumber>
+          <CalibrationDate></CalibrationDate>
+          <OutputType>2</OutputType>
+          <Free>1</Free>
+        </NotInUse>
+      </Sensor>
+      <Sensor index="5" SensorID="20" >
+        <FluoroWetlabECO_AFL_FL_Sensor SensorID="20" >
+          <SerialNumber>FLRT-8324</SerialNumber>
+          <CalibrationDate>23-Jun-23</CalibrationDate>
+          <ScaleFactor>1.20000000e+001</ScaleFactor>
+          <!-- Dark output -->
+          <Vblank>0.0400</Vblank>
+        </FluoroWetlabECO_AFL_FL_Sensor>
+      </Sensor>
+      <Sensor index="6" SensorID="61" >
+        <UserPolynomialSensor SensorID="61" >
+          <SerialNumber>22450005</SerialNumber>
+          <CalibrationDate>June 2025</CalibrationDate>
+          <SensorName>Pyroscience pH</SensorName>
+          <A0>7.00000000</A0>
+          <A1>0.40000000</A1>
+          <A2>0.00000000</A2>
+          <A3>0.00000000</A3>
+        </UserPolynomialSensor>
+      </Sensor>
+    </SensorArray>
+  </Instrument>
+</SBE_InstrumentConfiguration>

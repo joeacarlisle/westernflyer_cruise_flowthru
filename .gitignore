@@ -1,0 +1,29 @@
+# Virtual environment
+.venv/
+
+# JetBrains tools
+.idea/
+.junie/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Python egg
+wf_flowthru.egg-info
+
+# Generated output
+processed/
+logs/
+
+# Raw data archives
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Local clean-up and backup files
+_to_delete/
+*.bak_*

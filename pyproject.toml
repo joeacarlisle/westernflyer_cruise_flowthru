@@ -1,0 +1,36 @@
+[project]
+name = "wf-flowthru"
+version = "0.1.0"
+description = "Western Flyer flow-through (SBE 21 thermosalinograph) raw hex to DuckDB"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+authors = [
+    {name = "Joe Carlisle", email = "joeacarlisle@gmail.com"},
+]
+
+dependencies = [
+    # Exact versions, matching the westernflyer_cruise_ctd project's environment (Python 3.12.10).
+    "duckdb==1.5.4",
+    "numpy==2.5.0",
+    "pandas==3.0.3",
+    # Visualization & geospatial (required by flowthru_holoviews.py)
+    "bokeh==3.9.2",
+    "cartopy==0.25.0",
+    "geoviews==1.15.1",
+    "holoviews==1.23.2",
+    "panel==1.9.4",
+    # Cartopy dependencies, pinned to the versions the CTD project uses
+    "pyproj==3.7.2",
+    "shapely==2.1.2",
+]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "sbe21_ingestion",
+    "flowthru_holoviews",
+]
