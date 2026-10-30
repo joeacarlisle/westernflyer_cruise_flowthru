@@ -23,7 +23,7 @@ Tabs
 
 Converted variables (temp_c, cond_sm, sal_psu, fluor_mgm3, and C-Star beam attenuation /
 transmission when present) come from SBE Data Processing .cnv files imported by main.py.
-Cruises without a .cnv show only speed and depth, and a warning appears in the sidebar.
+Cruises without a .cnv show only ship speed, and a warning appears in the sidebar.
 Set WF_DEFAULT_CRUISE to choose the cruise shown at start-up.
 """
 
@@ -130,7 +130,12 @@ _VAR_CANDIDATES = [
     ("Beam attenuation (1/m)", "cstar_atten_m"), ("Beam transmission (%)", "cstar_trans_pct"),
     ("Ship speed (m/s)", "speed_ms"), ("Depth (m)", "depth_m"),
 ]
-VARS = {label: col for label, col in _VAR_CANDIDATES if col in _table_cols}
+def _has_data(col):
+    """True if the column exists and has at least one non-NULL value (depth_m is empty for .cnv-only builds)."""
+    return col in _table_cols and con.execute(f'SELECT COUNT("{col}") FROM {TABLE_NAME}').fetchone()[0] > 0
+
+
+VARS = {label: col for label, col in _VAR_CANDIDATES if _has_data(col)}
 CALIBRATED = "temp_c" in _table_cols
 
 # 3. GLOBAL WIDGETS

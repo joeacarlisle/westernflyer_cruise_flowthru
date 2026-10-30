@@ -1,10 +1,10 @@
 @echo off
 setlocal EnableDelayedExpansion
 REM Build every cruise under cruises\ into processed\wf_flowthru.duckdb, one after another.
-REM Usage:   flowthru_build_all.bat [extra args forwarded to main.py, e.g. --require-cnv]
+REM Usage:   flowthru_build_all.bat [extra args forwarded to main.py, e.g. --verbose]
 REM Each cruise is a folder under cruises\ whose name is the cruise ID.
 REM Add a new cruise by creating its folder; no edit to this script is needed.
-REM Cruises without .cnv files are loaded without converted temperature / salinity (see the log).
+REM Each cruise is built from its .cnv files only; a cruise with no .cnv files fails (see the log).
 
 pushd "%~dp0..\.."
 

@@ -4,12 +4,12 @@ This repository contains the processing pipeline and visualization suite for flo
 
 ## Feature Summary
 
-The Western Flyer flow-through codebase is a modular processing pipeline for the ship's Sea-Bird SBE 21 SeaCAT thermosalinograph (S/N 3507). It provides a standardized framework for raw hex data ingestion, position and time reconstruction, quality flagging, and interactive visualization. It mirrors the layout of the sister project [westernflyer_cruise_ctd](https://github.com/joeacarlisle/westernflyer_cruise_ctd).
+The Western Flyer flow-through codebase is a modular processing pipeline for the ship's Sea-Bird SBE 21 SeaCAT thermosalinograph (S/N 3507). It provides a standardized framework for SBE Data Processing `.cnv` ingestion, ship-speed derivation, quality flagging, and interactive visualization. It mirrors the layout of the sister project [westernflyer_cruise_ctd](https://github.com/joeacarlisle/westernflyer_cruise_ctd).
 
-* **Raw .hex Processing:** The pipeline starts from raw Seasave `.hex` files. It parses both 40- and 46-character row formats, skips malformed lines, decodes NMEA latitude/longitude and depth, and builds UTC timestamps.
-* **SBE Data Processing .cnv Integration:** The Sea-Bird Scientific Python toolkit does not support the SBE 21, so the pipeline does not convert counts itself. When SBE Data Processing `.cnv` files are present they are matched to the `.hex` scans and add `temp_c`, `cond_sm` and `sal_psu` (plus `fluor_mgm3`, `cstar_atten_m` and `cstar_trans_pct` when those variables are in the `.cnv`). Files without a `.cnv` are loaded as raw counts and listed in the log.
-* **Modular Cruise Architecture:** Each cruise is isolated under `cruises/<cruise_id>/`. Adding a new cruise requires only creating a directory with the raw `.hex` files and a `config.toml`; the directory name is the cruise ID.
-* **Sidecar Data Integration:** The pipeline joins raw scans with `config.toml` (time source and QC limits), the `.xmlcon` / `.XMLCON` configuration files (calibration, recorded for provenance), and the `.cnv` files (converted values) automatically.
+* **SBE Data Processing .cnv ingestion:** The pipeline reads only the `.cnv` files written by SBE Data Processing. Scans, UTC time (header `start_time` + `timeS`), latitude/longitude, temperature, conductivity, salinity, fluorescence and sound velocity are used exactly as written; the only change is that the file's own `bad_flag` value becomes NULL. `cond_sm`, `temp_c`, `sal_psu` and `fluor_mgm3` (plus `cstar_atten_m` and `cstar_trans_pct` when present) are stored under those names.
+* **No .hex or .xmlcon needed:** `.hex` and `.xmlcon` files in a cruise folder are ignored. The build runs when they are absent. Sensor serial numbers and calibration dates, and a SHA-256 fingerprint of the sensor-configuration XML embedded in each `.cnv` header, are recorded instead.
+* **Modular Cruise Architecture:** Each cruise is isolated under `cruises/<cruise_id>/`. Adding a new cruise requires only a directory with the `.cnv` files (in `cnv/` or the cruise folder) and, optionally, a `config.toml`; the directory name is the cruise ID.
+* **Derived values:** Ship speed (`speed_ms`) is computed from the `.cnv` latitude/longitude and time. A `.cnv` carries no depth, so `depth_m` is empty and the dashboard hides it.
 * **Automated QC Flagging:** Scans are flagged, never removed. A `qc_flag` bitmask marks spikes, implausible ship speed, missing NMEA depth, a first scan far from the header position, and implausible converted salinity or temperature (cell not flowing seawater).
 * **Atomic, Idempotent Storage:** Processed data is managed via DuckDB. Per-cruise records are replaced atomically inside a single transaction. A `build_metadata` table records build provenance, and a `flowthru_cnv` table records each `.cnv` (name, SHA-256, rows matched, status).
 * **Per-Build Audit Logging:** Each invocation writes a fresh, timestamped log file (`logs/wf_flowthru_build_<cruise>_<timestamp>.log`).
@@ -17,7 +17,7 @@ The Western Flyer flow-through codebase is a modular processing pipeline for the
 
 ## Current Status
 
-**Raw counts only unless `.cnv` files are supplied.** The `.hex` headers carry no calibration, so temperature, conductivity and salinity are not computed until the SBE 21 `.xmlcon` / calibration sheet is available or `.cnv` files are imported.
+**The pipeline runs from `.cnv` files only.** It does not convert counts and does not read `.hex` or `.xmlcon` files. A cruise folder with no `.cnv` files stops the build with an error.
 
 ## Root Directory Notes
 
@@ -68,16 +68,16 @@ This has the advantage of not requiring root privileges, and it does not install
     |   |   |   config.toml                                       time source and QC limits
     |   |   |
     |   |   +---cnv
-    |   |   |       20250415.cnv      SBE Data Processing output (same name as the .hex)
+    |   |   |       20250415.cnv      SBE Data Processing output (the only data source)
     |   |   |       ... (etc)
     |   |   |
-    |   |   +---master_xmlcon         the two original configurations the per-file copies were made from
+    |   |   +---master_xmlcon         (archive only; not read by the pipeline)
     |   |   |       flowthrough_master_config-20241112.xmlcon             (NMEA depth off)
     |   |   |       flowthrough_master_config-20241112_nmea_depth_on.xmlcon
     |   |   |
-    |   |   \---hex
+    |   |   \---hex                   (archive only; not read by the pipeline)
     |   |           20250415.hex
-    |   |           20250415.XMLCON   one .XMLCON beside every .hex (same name)
+    |   |           20250415.XMLCON
     |   |           20250416.hex
     |   |           20250416.XMLCON
     |   |           ... (etc)
@@ -88,7 +88,7 @@ This has the advantage of not requiring root privileges, and it does not install
     |   |   +---cnv
     |   |   |       20250611.cnv
     |   |   |
-    |   |   \---hex
+    |   |   \---hex                   (optional; not read)
     |   |           20250611.hex
     |   |           20250611.XMLCON
     |   |
@@ -100,7 +100,6 @@ This has the advantage of not requiring root privileges, and it does not install
         |       flowthru_build.sh                  (generic; takes <cruise_id>)
         |       flowthru_build_all.sh              (builds every cruise under cruises/)
         |       flowthru_build_2025_Baja.sh        (wrapper around flowthru_build.sh 2025_Baja)
-        |       flowthru_build_2025_Baja_cnv.sh    (same build, uses the .cnv files)
         |       flowthru_build_<cruise_id>.sh      (one wrapper per cruise)
         |       flowthru_dashboard.sh
         |
@@ -108,7 +107,6 @@ This has the advantage of not requiring root privileges, and it does not install
                 flowthru_build.bat                 (generic; takes <cruise_id>)
                 flowthru_build_all.bat             (builds every cruise under cruises\)
                 flowthru_build_2025_Baja.bat       (wrapper around flowthru_build.bat 2025_Baja)
-                flowthru_build_2025_Baja_cnv.bat   (same build, uses the .cnv files)
                 flowthru_build_<cruise_id>.bat     (one wrapper per cruise)
                 flowthru_dashboard.bat
 
@@ -129,13 +127,13 @@ This has the advantage of not requiring root privileges, and it does not install
 
 ## File Descriptions
 
-* **main.py** — Orchestrator. Parses CLI args, loads the `config.toml` and calibration files, runs the per-file pipeline, matches `.cnv` files, writes the DuckDB atomically, and stamps build provenance.
-* **sbe21_ingestion.py** — SBE 21 hex reader. Parses headers and scan rows, decodes NMEA position and depth, builds timestamps, sets QC flags, matches and merges `.cnv` files, and provides the calibration hook.
+* **main.py** — Orchestrator. Parses CLI args, loads the optional `config.toml`, finds the `.cnv` files, runs the per-file pipeline, writes the DuckDB atomically, and stamps build provenance.
+* **sbe21_ingestion.py** — `.cnv` reader (`ingest_sbe21_cnv`). Parses the `.cnv` header and data rows, builds timestamps, derives ship speed, and sets QC flags. The older `.hex` / `.xmlcon` reader functions remain in the module for reference but are not called.
 * **flowthru_holoviews.py** — Read-only Panel dashboard. Reactive widgets update all tabs when the cruise or file selection changes.
 * **pyproject.toml** — Package definition. Enables `pip install -e .` to install the project and all dependencies in one step.
 * **config.toml** — Processing constants per cruise (time source, QC limits). See schema below.
-* **.xmlcon / .XMLCON** — SBE 21 configuration file (calibration coefficients). Required by SBE Data Processing to create the `.cnv` files; `main.py` reads and records it but does not use it to convert counts. Every cruise follows one rule: a `.XMLCON` with the same name sits beside each `.hex` in `hex/`. It takes priority; a single cruise-level `.xmlcon` is only a fallback (`--xmlcon` overrides both).
-* **.cnv** — SBE Data Processing output. Supplies converted temperature, conductivity and salinity.
+* **.cnv** — SBE Data Processing output and the only data source. Supplies time, position and the converted variables.
+* **.hex / .xmlcon** — Not read by the pipeline. They are only needed upstream, by SBE Data Processing, to create the `.cnv` files.
 
 ## Prerequisites
 
@@ -175,20 +173,17 @@ The `-e` (editable) flag means source changes are picked up immediately without 
 | Step | File(s) | Location | Needed? |
 |---|---|---|---|
 | 1 | Cruise directory | `cruises/<cruise_id>/` | **Required** |
-| 2 | Raw `.hex` files | `cruises/<cruise_id>/hex/` | **Required** |
-| 3 | `config.toml` (copy from an existing cruise, e.g. `2025_Baja`; see schema below) | `cruises/<cruise_id>/config.toml` | **Required** |
-| 4 | SBE 21 `.XMLCON` beside each `.hex` (same name) | `cruises/<cruise_id>/hex/` | **Required to run SBE Data Processing** (it is needed to create the `.cnv` files); not needed by `main.py` itself |
-| 5 | SBE Data Processing `.cnv` files | `cruises/<cruise_id>/cnv/` | **Required for temperature, conductivity and salinity** |
+| 2 | SBE Data Processing `.cnv` files | `cruises/<cruise_id>/cnv/` (or the cruise folder) | **Required** |
+| 3 | `config.toml` (copy from an existing cruise, e.g. `2025_Baja`; see schema below) | `cruises/<cruise_id>/config.toml` | Optional (default QC limits are used if missing) |
 
-* **Why step 4 matters:** SBE Data Processing needs the instrument's `.xmlcon` configuration file (the calibration coefficients) to convert the raw `.hex` counts into temperature, conductivity and salinity and write the `.cnv` files. Without the `.xmlcon` you cannot produce the `.cnv` files. Keep the `.XMLCON` beside its `.hex` as the record of the calibration used. `main.py` itself only reads and records it (file name, SHA-256, sensor serial numbers and calibration dates). It does not convert counts.
-* **Why step 5 matters:** the pipeline does not convert counts. Temperature, conductivity and salinity (plus fluorescence and beam transmission when present) come only from the `.cnv` files. The build still runs without them, but every file without a `.cnv` is loaded as raw counts only, and the maps and charts then show counts instead of temperature and salinity. Use `--require-cnv` to stop the build if any `.hex` has no `.cnv`.
+* **`.hex` and `.xmlcon` files are not needed.** The pipeline never reads them. Keep them wherever you archive the raw instrument data.
+* **Use the final `.cnv`** (the one with salinity). Values are used exactly as written; the pipeline never edits a `.cnv`.
 
-### .cnv matching
+### .cnv requirements
 
-* Place each `.cnv` in `cruises/<cruise_id>/cnv/` (or the cruise folder) with the `.hex` name, e.g. `20250611.cnv` (a `_suffix` is allowed). Use the final `.cnv` with salinity.
-* Matching is by the `.cnv` `scan` column, and checked against the `.hex` latitude/longitude. A `.cnv` whose position does not agree is rejected, not merged.
-* A `.cnv` with fewer rows than the `.hex` has scans is applied to those scans only and logged as a warning (re-run Data Conversion with all scans).
-* Files without a `.cnv` are loaded as raw counts (listed in the log). `--require-cnv` stops the build instead.
+* Any file name is accepted. The file name without `.cnv` becomes the leg name (`file_key`) shown in the dashboard.
+* Each `.cnv` needs the `timeS`, `latitude` and `longitude` columns and a `start_time` line in its header. A file that lacks them fails and is listed in the log; the other files still load.
+* If the number of data rows differs from the header's `nvalues`, or rows are malformed, the file is loaded and the `flowthru_cnv` status says so.
 
 ## Running the Pipeline
 
@@ -215,12 +210,12 @@ Run the build with the cruise ID as the argument:
 * **Windows:** `scripts\windows\flowthru_build.bat <cruise_id>`
 * **Linux / macOS:** `./scripts/linux_mac/flowthru_build.sh <cruise_id>`
 
-Each cruise also has a shortcut script with the cruise ID filled in, for example `scripts\windows\flowthru_build_2025_Baja.bat`. `flowthru_build_2025_Baja_cnv.bat` runs the same build and is the Baja 2025 script that documents the use of the `.cnv` files. To rebuild every cruise under `cruises/` one after another, run:
+Each cruise also has a shortcut script with the cruise ID filled in, for example `scripts\windows\flowthru_build_2025_Baja.bat`. To rebuild every cruise under `cruises/` one after another, run:
 
 * **Windows:** `scripts\windows\flowthru_build_all.bat`
 * **Linux / macOS:** `./scripts/linux_mac/flowthru_build_all.sh`
 
-Extra arguments (such as `--require-cnv`) are passed on to `main.py`. A cruise's rows in the database are replaced each time it is built, so cruises renamed after an earlier build leave their old rows behind. To remove those, delete `processed/wf_flowthru.duckdb` and rebuild.
+Extra arguments (such as `--verbose`) are passed on to `main.py`. A cruise's rows in the database are replaced each time it is built, so cruises renamed after an earlier build leave their old rows behind. To remove those, delete `processed/wf_flowthru.duckdb` and rebuild.
 
 Re-run `main.py` after any change to `sbe21_ingestion.py` or `config.toml`; the dashboard only reads the existing database.
 
@@ -229,15 +224,8 @@ Alternatively, call `main.py` directly for full control. The following are examp
     # Basic build
     python main.py 2025_Baja
 
-    # Stop unless every .hex file has a matching .cnv
-    python main.py 2025_Baja --require-cnv
-
     # Write output to a custom DuckDB path
     python main.py 2025_Baja --db /path/to/custom.duckdb
-
-    # Override the xmlcon or hex directory locations
-    python main.py 2025_Baja --xmlcon /path/to/custom.xmlcon
-    python main.py 2025_Baja --hex-dir /path/to/hex_files/
 
 ### CLI arguments
 
@@ -245,14 +233,11 @@ Alternatively, call `main.py` directly for full control. The following are examp
 |--------------------|------------------------------------------|------------------------------------------------------|
 | `cruise_id`        | *(required)*                             | Cruise directory name under `cruises/`               |
 | `--db`             | `processed/wf_flowthru.duckdb`           | DuckDB output path                                   |
-| `--xmlcon`         | `.XMLCON` beside each hex (fallback: one in the cruise folder) | Path to SBE 21 configuration file (optional)    |
-| `--hex-dir`        | `cruises/<id>/hex/`                      | Directory containing raw `.hex` files                |
-| `--require-cnv`    | Off                                      | Stop unless every `.hex` file has a matching `.cnv`  |
 | `--verbose` / `-v` | Off                                      | Enable DEBUG-level logging                           |
 
 ### Output tables
 
-`flowthru_data` has one row per scan: `cruise_id, file_key, scan_index, time_utc, lat, lon, depth_m, ch0_counts ... ch5_raw, aux_byte, flag_byte, speed_ms, qc_flag, station_name, operator, sample_interval_s`, plus the converted columns (`temp_c`, `cond_sm`, `sal_psu` and others) when a `.cnv` is matched. `build_metadata` records build provenance, and `flowthru_cnv` records each matched `.cnv` (name, SHA-256, rows matched, status).
+`flowthru_data` has one row per scan: `cruise_id, file_key, scan_index, time_utc, lat, lon, depth_m (empty), temp_c, cond_sm, sal_psu, fluor_mgm3, sound_velocity_fts` (plus `cstar_atten_m` and `cstar_trans_pct` when present), `speed_ms, qc_flag, station_name, operator, sample_interval_s`. `build_metadata` records build provenance. `flowthru_cnv` records each `.cnv` (name, SHA-256, rows declared and loaded, status). `flowthru_calibration` records the sensor serials and calibration dates from each `.cnv` header, with a SHA-256 of the embedded sensor-configuration XML (not of the original `.xmlcon`).
 
 ## Running the Dashboard
 

@@ -1,30 +1,31 @@
 """Western Flyer flow-through (SBE 21) build orchestrator.
 
 Usage:
-    python main.py <cruise_id> [--xmlcon PATH] [--hex-dir PATH] [--db PATH] [--verbose]
+    python main.py <cruise_id> [--db PATH] [--verbose]
 
 The cruise_id maps to ``cruises/<cruise_id>/`` (same convention as the
 westernflyer_cruise_ctd pipeline).  Expected layout:
 
     cruises/<cruise_id>/
-        config.toml           processing parameters (time source, QC limits)
-        <any name>.xmlcon     cruise-wide fallback configuration (optional; one file only)
-        hex/                  raw Seasave .hex files -- one per logging session,
-                              each with its own same-named .XMLCON beside it
+        config.toml           processing parameters (QC limits; optional)
+        cnv/                  SBE Data Processing .cnv files, one per logging session
+                              (or place them directly in the cruise folder)
+
+Only the .cnv files are read.  Their values are used exactly as written by SBE Data
+Processing.  Any .hex / .xmlcon files in the cruise folder are ignored, and the
+build runs without them.
 
 Per file:
-    parse_hex_header          instrument, NMEA start time, comments
-    read_sbe21_hex            raw counts, lat/lon, depth
-    apply_qc_flags            ship-speed and spike flags
-    load_calibration          the file's own .xmlcon (else --xmlcon / the cruise folder .xmlcon)
-    apply_calibration         (count conversion not yet implemented; counts pass through)
+    parse_cnv_header          start time, NMEA position, station / operator, sensor serials
+    read_cnv                  scans, elapsed time, lat/lon, temperature, conductivity, salinity ...
+    apply_cnv_qc_flags        ship speed (from lat/lon + time) and QC flags
 
 Output, in a single DuckDB file:
     processed/wf_flowthru.duckdb
-        flowthru_data   one row per scan
-        build_metadata  one row per build (git commit, calibration SHA-256, counts)
-        flowthru_cnv    one row per hex file with a .cnv: name, SHA-256, rows matched, status
-        flowthru_calibration  one row per hex file: .xmlcon used, SHA-256, T/C serials + cal dates
+        flowthru_data   one row per scan (depth_m is empty: a .cnv has no depth)
+        build_metadata  one row per build (git commit, calibration fingerprint, counts)
+        flowthru_cnv    one row per .cnv: name, SHA-256, rows declared / loaded, status
+        flowthru_calibration  one row per .cnv: T/C serials + cal dates from the .cnv header
 
 Per-cruise rows are replaced atomically inside one transaction.
 """
@@ -153,12 +154,6 @@ def parse_args(argv=None):
     p.add_argument("cruise_id", help="Cruise directory name under cruises/, e.g. 2025_Baja")
     p.add_argument("--db", type=pathlib.Path, default=DEFAULT_DB_PATH,
                    help=f"DuckDB output path (default: {DEFAULT_DB_PATH})")
-    p.add_argument("--xmlcon", type=pathlib.Path, default=None,
-                   help="SBE 21 .xmlcon (default: the single .xmlcon in cruises/<cruise_id>/, optional)")
-    p.add_argument("--require-cnv", action="store_true",
-                   help="Stop unless every .hex file has a matching SBE Data Processing .cnv")
-    p.add_argument("--hex-dir", type=pathlib.Path, default=None,
-                   help="Directory of raw .hex files (default: cruises/<cruise_id>/hex/)")
     p.add_argument("--verbose", "-v", action="store_true", help="DEBUG-level logging")
     return p.parse_args(argv)
 
@@ -179,89 +174,39 @@ def main(argv=None):
     logging.info("--- STARTING FLOW-THROUGH PIPELINE FOR %s ---", cruise_id.upper())
     logging.info("Build log: %s", log_path)
 
-    config = sbe21_ingestion.load_config(cruise_dir / 'config.toml')
+    config_path = cruise_dir / 'config.toml'
+    if config_path.exists():
+        config = sbe21_ingestion.load_config(config_path)
+    else:
+        logging.warning("No config.toml in %s; using default QC limits.", cruise_dir)
+        config = {}
     config['CRUISE_ID'] = cruise_id
 
-    # Calibration source, in order: --xmlcon (applies to every file), the .XMLCON saved beside
-    # each .hex file, then the single .xmlcon in the cruise folder as a fallback.
-    override = sbe21_ingestion.load_calibration(args.xmlcon) if args.xmlcon else None
-    if args.xmlcon and override is None:
-        logging.error("--xmlcon file not found: %s", args.xmlcon)
-        sys.exit(1)
-    # Cruise-level .xmlcon file(s).  With several (e.g. Baja: NMEA depth off / on), each hex
-    # file uses the one whose NmeaDepthDataAdded setting matches its scan-line length.
-    cruise_cals = [sbe21_ingestion.load_calibration(p) for p in sorted(cruise_dir.iterdir())
-                   if p.is_file() and p.suffix.lower() == '.xmlcon']
-
-    hex_dir = args.hex_dir if args.hex_dir else cruise_dir / 'hex'
-    if not hex_dir.exists():
-        logging.error("Hex directory not found: %s", hex_dir)
-        sys.exit(1)
-    files = sorted(hex_dir.glob("*.hex"))
+    # .cnv files from SBE Data Processing: cruise_dir/cnv, else the cruise folder itself.
+    files = sbe21_ingestion.find_cnv_files([cruise_dir / 'cnv', cruise_dir])
     if not files:
-        logging.warning("No .hex files found in %s", hex_dir)
-
-    # .cnv files from SBE Data Processing (temperature, conductivity, salinity ...).
-    # Searched in cruise_dir/cnv, then cruise_dir, then the hex folder.
-    cnv_dirs = [cruise_dir / 'cnv', cruise_dir, hex_dir]
-    cnv_for = {fp: sbe21_ingestion.find_matching_cnv(fp, cnv_dirs) for fp in files}
-    missing = [fp.name for fp, c in cnv_for.items() if c is None]
-    if args.require_cnv and missing:
-        logging.error("No .cnv found for %d file(s): %s", len(missing), ", ".join(missing))
+        logging.error("No .cnv files found in %s or %s.", cruise_dir / 'cnv', cruise_dir)
         sys.exit(1)
-    if not any(cnv_for.values()):
-        logging.info("No .cnv files found: output is raw counts.")
 
     frames, failures, n_bad, cal_rows, cnv_rows = [], [], 0, [], []
     for fp in files:
         logging.info("Processing: %s", fp.name)
         try:
-            if override is not None:
-                calibration = override
-            else:
-                own = sbe21_ingestion.find_matching_xmlcon(fp)
-                if own:
-                    calibration = sbe21_ingestion.load_calibration(own)
-                elif len(cruise_cals) <= 1:
-                    calibration = cruise_cals[0] if cruise_cals else None
-                else:
-                    want = '1' if sbe21_ingestion.hex_has_depth(fp) else '0'
-                    cands = [c for c in cruise_cals if c['nmea_depth'] == want]
-                    if len(cands) != 1:
-                        raise ValueError(f"{len(cands)} cruise .xmlcon files have NMEA depth = {want} "
-                                         f"({', '.join(c['name'] for c in cruise_cals)}); cannot choose.")
-                    calibration = cands[0]
-            if calibration is None:
-                logging.warning("  no .xmlcon for %s: RAW COUNTS only.", fp.name)
-            else:
-                logging.info("  calibration: %s", calibration['name'])
-                by_type = {}
-                for s_ in calibration['sensors']:
-                    if s_['serial']:  # skip empty slots (e.g. the unused 2nd temperature sensor)
-                        by_type.setdefault(s_['type'], s_)
-                t = by_type.get('TemperatureSensor', {})
-                c = by_type.get('ConductivitySensor', {})
-                cal_rows.append((fp.stem, calibration['name'], calibration['sha256'],
-                                 t.get('serial'), t.get('cal_date'), c.get('serial'), c.get('cal_date'),
-                                 calibration['nmea_position'], calibration['nmea_depth']))
-            df = sbe21_ingestion.ingest_sbe21_hex(fp, config, cruise_id=cruise_id,
-                                                  calibration=calibration, cnv_path=cnv_for[fp])
-            ci = df.attrs.get('cnv')
-            if ci:
-                log = logging.info if ci['status'].startswith('applied') and ci['n_matched'] >= ci['n_hex_scans'] else logging.warning
-                log("  cnv: %s -> %s (%d .cnv rows, %d of %d scans matched, %d position mismatches, method %s)",
-                    ci['cnv_name'], ci['status'], ci['n_cnv_rows'], ci['n_matched'], ci['n_hex_scans'],
-                    ci['n_position_mismatch'], ci['match_method'])
-                cnv_rows.append((fp.stem, ci['cnv_name'], ci['cnv_sha256'], ci['datcnv_date'],
-                                 ci['n_hex_scans'], ci['n_cnv_rows'], ci['n_matched'],
-                                 ci['n_position_mismatch'], ci['match_method'], ci['status'], ci['columns']))
-            else:
-                logging.info("  no .cnv for %s (raw counts only)", fp.name)
+            df = sbe21_ingestion.ingest_sbe21_cnv(fp, config, cruise_id=cruise_id)
+            ci = df.attrs['cnv']
+            log = logging.info if ci['status'] == 'loaded' else logging.warning
+            log("  cnv: %s -> %s (%d rows)", ci['cnv_name'], ci['status'], ci['n_loaded'])
+            cnv_rows.append((fp.stem, ci['cnv_name'], ci['cnv_sha256'], ci['datcnv_date'],
+                             ci['n_declared'], ci['n_cnv_rows'], ci['n_loaded'],
+                             0, 'cnv-only', ci['status'], ci['columns']))
+            cal = df.attrs.get('calibration')
+            if cal:
+                cal_rows.append((fp.stem, *cal))
             bad = df.attrs.get('n_bad_lines', 0)
             n_bad += bad
             flagged = int((df['qc_flag'] & (sbe21_ingestion.QC_SPIKE | sbe21_ingestion.QC_SPEED
                                            | sbe21_ingestion.QC_BAD_TSC)).astype(bool).sum())
-            logging.info("  %d scans, %s -> %s, %d malformed line(s), %d QC-flagged",
+            logging.info("  %d scans, %s -> %s, %d malformed row(s), %d QC-flagged",
                          len(df), df['time_utc'].iloc[0], df['time_utc'].iloc[-1], bad, flagged)
             frames.append(df)
         except Exception as exc:

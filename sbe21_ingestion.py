@@ -1,4 +1,11 @@
-"""Sea-Bird SBE 21 SeaCAT thermosalinograph (flow-through) .hex ingestion.
+"""Sea-Bird SBE 21 SeaCAT thermosalinograph (flow-through) ingestion.
+
+CURRENT PIPELINE: ``main.py`` builds the database from SBE Data Processing .cnv
+files only (see ``ingest_sbe21_cnv`` at the end of this module).  The .cnv values
+are used exactly as written; no .hex or .xmlcon file is read.  The raw .hex
+reader and the .xmlcon reader below are kept for reference and are not called.
+
+Original .hex description follows.
 
 Reads raw Seasave V7 .hex files from the Western Flyer flow-through system
 (SBE 21, S/N 3507) and returns one row per scan with:
@@ -378,6 +385,7 @@ CNV_COLUMNS = {
     'c0S/m': 'cond_sm',         # Conductivity [S/m]
     'sal00': 'sal_psu',         # Salinity, Practical [PSU]
     'flECO-AFL': 'fluor_mgm3',  # Fluorescence, WET Labs ECO-AFL/FL [mg/m^3]
+    'svCF': 'sound_velocity_fts',   # Sound velocity [Chen-Millero, ft/s] as written by SBE Data Processing
     'CStarAt0': 'cstar_atten_m',    # Beam attenuation, WET Labs C-Star [1/m]
     'CStarTr0': 'cstar_trans_pct',  # Beam transmission, WET Labs C-Star [%]
 }
@@ -636,3 +644,220 @@ def ingest_sbe21_hex(file_path, config, cruise_id=None, calibration=None, cnv_pa
     out.attrs['calibration'] = calibration
     out.attrs['cnv'] = cnv_info
     return out
+
+
+# ---------------------------------------------------------------------------
+# .cnv-only ingestion (the pipeline's data source)
+# ---------------------------------------------------------------------------
+# Everything comes from the SBE Data Processing .cnv: scans, time, position and the
+# converted variables.  Values are used as written (only the file's own bad_flag
+# sentinel becomes NaN).  Ship speed and QC flags are derived from them; nothing is
+# removed.  Depth is not in a .cnv, so depth_m is NaN.
+
+def find_cnv_files(search_dirs):
+    """.cnv files (sorted) from the first directory in ``search_dirs`` that has any."""
+    for d in search_dirs:
+        d = Path(d)
+        if d.is_dir():
+            found = sorted(p for p in d.iterdir() if p.is_file() and p.suffix.lower() == '.cnv')
+            if found:
+                return found
+    return []
+
+
+def parse_cnv_header(cnv_path):
+    """Reads the ``*`` / ``**`` / ``#`` header of a .cnv (up to ``*END*``).
+
+    Returns a dict: start_time, start_source, nmea_utc, system_utc,
+    upload_time_local, header_lat, header_lon, interval_s, nvalues, datcnv_date,
+    station, operator, notes, temp_serial, temp_cal_date, cond_serial,
+    cond_cal_date, calibration_sha256 (hash of the sensor-configuration XML the
+    .cnv header embeds; None if absent).
+    """
+    info = {
+        'start_time': pd.NaT, 'start_source': '', 'nmea_utc': pd.NaT, 'system_utc': pd.NaT,
+        'upload_time_local': pd.NaT, 'header_lat': None, 'header_lon': None,
+        'interval_s': None, 'nvalues': None, 'datcnv_date': '',
+        'station': '', 'operator': '', 'notes': [],
+        'temp_serial': None, 'temp_cal_date': None, 'cond_serial': None, 'cond_cal_date': None,
+        'calibration_sha256': None,
+    }
+    xml, sensor = [], None
+    with open(cnv_path, 'r', errors='replace') as f:
+        for line in f:
+            s = line.rstrip('\r\n')
+            if s.startswith('*END*'):
+                break
+            if s.startswith('**'):
+                body = s[2:].strip()
+                low = body.lower()
+                if low.startswith('station:'):
+                    info['station'] = body.split(':', 1)[1].strip()
+                elif low.startswith('operator:'):
+                    info['operator'] = body.split(':', 1)[1].strip()
+                elif low.startswith('ship:'):
+                    pass
+                elif body:
+                    info['notes'].append(body)
+                continue
+            if s.startswith('*'):
+                if '=' in s:
+                    key, val = [p.strip() for p in s[1:].split('=', 1)]
+                    if key == 'System UpLoad Time':
+                        info['upload_time_local'] = _parse_header_time(val)
+                    elif key == 'NMEA UTC (Time)':
+                        info['nmea_utc'] = _parse_header_time(val)
+                    elif key == 'System UTC':
+                        info['system_utc'] = _parse_header_time(val)
+                    elif key == 'NMEA Latitude':
+                        info['header_lat'] = _parse_header_dm(val)
+                    elif key == 'NMEA Longitude':
+                        info['header_lon'] = _parse_header_dm(val)
+                continue
+            if not s.startswith('#'):
+                continue
+            body = s[1:].strip()
+            if body.startswith('<'):
+                xml.append(body)
+                if body.startswith('<TemperatureSensor'):
+                    sensor = 'temp'
+                elif body.startswith('<ConductivitySensor'):
+                    sensor = 'cond'
+                elif body.startswith('</TemperatureSensor') or body.startswith('</ConductivitySensor'):
+                    sensor = None
+                elif sensor:
+                    m = re.match(r'<SerialNumber>([^<]*)</SerialNumber>', body)
+                    if m and info[f'{sensor}_serial'] is None:
+                        info[f'{sensor}_serial'] = m.group(1).strip()
+                    m = re.match(r'<CalibrationDate>([^<]*)</CalibrationDate>', body)
+                    if m and info[f'{sensor}_cal_date'] is None:
+                        info[f'{sensor}_cal_date'] = m.group(1).strip()
+                continue
+            m = re.match(r'start_time\s*=\s*(.*?)\s*(?:\[(.*)\])?\s*$', body)
+            if m:
+                info['start_time'] = _parse_header_time(m.group(1))
+                info['start_source'] = (m.group(2) or '').strip()
+                continue
+            m = re.match(r'interval\s*=\s*seconds:\s*([\d.]+)', body)
+            if m:
+                info['interval_s'] = float(m.group(1))
+                continue
+            m = re.match(r'nvalues\s*=\s*(\d+)', body)
+            if m:
+                info['nvalues'] = int(m.group(1))
+                continue
+            m = re.match(r'datcnv_date\s*=\s*(.*)$', body)
+            if m:
+                info['datcnv_date'] = m.group(1).strip()
+    if xml:
+        info['calibration_sha256'] = hashlib.sha256('\n'.join(xml).encode('utf-8')).hexdigest()
+    return info
+
+
+def apply_cnv_qc_flags(df, t_s, config, header_lat=None, header_lon=None):
+    """Adds ``speed_ms`` and ``qc_flag`` using only values that are in the .cnv.
+
+    Speed is the distance between positions ``SPEED_LAG_SCANS`` apart over the
+    elapsed time (Seasave latches the last NMEA fix, so adjacent scans repeat a
+    position).  Flags are set, never removed: QC_SPEED (speed > MAX_SPEED_MS),
+    QC_BAD_POSITION (first scan far from the header NMEA position), then the
+    converted-value tests QC_BAD_TSC and QC_SPIKE.
+    """
+    max_speed = float(config.get('MAX_SPEED_MS', 10.0))
+    lag = max(int(config.get('SPEED_LAG_SCANS', 10)), 1)
+    pos_tol = float(config.get('POSITION_TOL_DEG', 1.0))
+
+    lat, lon = df['lat'].to_numpy(float), df['lon'].to_numpy(float)
+    speed = np.full(len(df), np.nan)
+    if len(df) > lag:
+        dist = _haversine_m(lat[:-lag], lon[:-lag], lat[lag:], lon[lag:])
+        with np.errstate(divide='ignore', invalid='ignore'):
+            speed[lag:] = dist / (t_s[lag:] - t_s[:-lag])
+    df['speed_ms'] = speed
+
+    flag = np.zeros(len(df), dtype=np.int64)
+    flag[np.nan_to_num(speed, nan=0.0) > max_speed] |= QC_SPEED
+    if header_lat is not None and header_lon is not None and len(df):
+        if abs(lat[0] - header_lat) > pos_tol or abs(lon[0] - header_lon) > pos_tol:
+            flag[0] |= QC_BAD_POSITION
+    df['qc_flag'] = flag
+    df = flag_implausible_tsc(df, config)
+    df = flag_converted_spikes(df, config)
+    return df
+
+
+def ingest_sbe21_cnv(cnv_path, config, cruise_id=None):
+    """Converts one SBE Data Processing .cnv to a per-scan DataFrame.
+
+    Columns: cruise_id, file_key (the .cnv file name without extension), scan_index
+    (.cnv ``scan`` - 1), time_utc (header start_time + ``timeS``), lat, lon, depth_m
+    (always NaN), the converted variables in CNV_COLUMNS, speed_ms, qc_flag,
+    station_name, operator, sample_interval_s.  ``df.attrs`` carries ``header``,
+    ``n_bad_lines`` (malformed data rows), ``cnv`` (row for the flowthru_cnv table)
+    and ``calibration`` (row for flowthru_calibration, from the .cnv header).
+    """
+    cnv_path = Path(cnv_path)
+    hdr = parse_cnv_header(cnv_path)
+    cnv, meta = read_cnv(cnv_path)
+    if cnv.empty:
+        raise ValueError(f"{cnv_path.name}: no data rows in .cnv.")
+    for need in ('timeS', 'latitude', 'longitude'):
+        if need not in cnv.columns:
+            raise ValueError(f"{cnv_path.name}: .cnv has no '{need}' column.")
+
+    start = hdr['start_time']
+    if pd.isnull(start):
+        start = hdr['nmea_utc'] if pd.notnull(hdr['nmea_utc']) else hdr['system_utc']
+        logging.warning("%s: no start_time line in .cnv header; used the header UTC time.", cnv_path.name)
+    if pd.isnull(start):
+        raise ValueError(f"{cnv_path.name}: no usable start time in .cnv header.")
+
+    t_s = cnv['timeS'].to_numpy(float)
+    if 'scan' in cnv.columns and cnv['scan'].notna().all():
+        scan_index = cnv['scan'].astype(int).to_numpy() - 1
+    else:
+        scan_index = np.arange(len(cnv))
+    interval = hdr['interval_s'] if hdr['interval_s'] else (float(np.nanmedian(np.diff(t_s))) if len(t_s) > 1 else 3.0)
+
+    df = pd.DataFrame({
+        'cruise_id': cruise_id or '',
+        'file_key': cnv_path.stem,
+        'scan_index': scan_index,
+        'time_utc': start + pd.to_timedelta(t_s, unit='s'),
+        'lat': cnv['latitude'].to_numpy(float),
+        'lon': cnv['longitude'].to_numpy(float),
+        'depth_m': np.nan,
+    })
+    cols = []
+    for short, col in CNV_COLUMNS.items():
+        if short in cnv.columns and col not in cols:
+            df[col] = cnv[short].to_numpy(float)
+            cols.append(col)
+
+    df = apply_cnv_qc_flags(df, t_s, config, hdr['header_lat'], hdr['header_lon'])
+    df['station_name'] = hdr['station']
+    df['operator'] = hdr['operator']
+    df['sample_interval_s'] = interval
+
+    n_rows, n_bad = len(cnv), meta['n_bad_rows']
+    declared = hdr['nvalues']
+    if n_bad == 0 and (declared is None or declared == n_rows):
+        status = 'loaded'
+    else:
+        status = f"loaded {n_rows} rows (header declares {declared}; {n_bad} malformed rows skipped)"
+    df.attrs['header'] = hdr
+    df.attrs['n_bad_lines'] = n_bad
+    df.attrs['cnv'] = {
+        'cnv_name': cnv_path.name,
+        'cnv_sha256': hashlib.sha256(cnv_path.read_bytes()).hexdigest(),
+        'datcnv_date': hdr['datcnv_date'],
+        'n_declared': declared, 'n_cnv_rows': n_rows, 'n_loaded': n_rows,
+        'status': status, 'columns': ','.join(cols),
+    }
+    if hdr['calibration_sha256']:
+        df.attrs['calibration'] = ('(embedded in .cnv header)', hdr['calibration_sha256'],
+                                   hdr['temp_serial'], hdr['temp_cal_date'],
+                                   hdr['cond_serial'], hdr['cond_cal_date'], None, None)
+    else:
+        df.attrs['calibration'] = None
+    return df
