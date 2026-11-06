@@ -42,11 +42,17 @@ import numpy as np
 import pandas as pd
 import panel as pn
 from bokeh.models import CustomJS
+from bokeh.core.validation import silence
+from bokeh.core.validation.warnings import FIXED_SIZING_MODE
 
 # 1. ENGINE INITIALIZATION
 pn.extension('tabulator')
 hv.extension('bokeh')
 gv.extension('bokeh')
+
+# Bokeh logs warning W-1005 because the stack of time-series charts is 'fixed' size inside a column that has a
+# width but no height.  The layout is intended and works, so only that one message is turned off.
+silence(FIXED_SIZING_MODE, True)
 
 # BokehJS paints the white backing of a multi-plot (grid) export without the browser's display-scaling
 # factor, so at 125% Windows scaling only the top-left 80% of the PNG is filled and the toolbar corner
@@ -84,15 +90,23 @@ MAP_WIDTH = 700               # map (left) and time-series (right) share one tab
 TS_WIDTH = 620
 TS_PANEL_HEIGHT = 170
 MAX_POINTS = 30000            # decimate plotted scans to keep the browser responsive
-# Esri Ocean has no tiles at close zoom (the map shows 'Map data not yet available').  When the
-# plotted track spans less than this many degrees, use Esri satellite imagery, which has close-up tiles.
-CLOSEUP_SPAN_DEG = 1.0
+# The track map always uses the Esri Ocean Base map with its labels (the same basemap as the CTD and echogram
+# maps), which shows seafloor relief.  Its tiles stop at about zoom 10 in many regions, and the start view is at least MIN_MAP_SPAN_KM across, so a short or stationary
+# track never opens zoomed in past the tiles ("Map data not yet available").
+MAP_MAX_ZOOM = 10
+MIN_MAP_SPAN_KM = 120.0
 QC_BAD_MASK = 19              # qc_flag bits 1 (spike), 2 (speed) and 16 (implausible T/S)
 
 # The database stores UTC.  Everything the dashboard shows (time slider, time axes, animation clock, tables)
 # is local ship time; queries convert back to UTC.  Set WF_DISPLAY_TZ=UTC to show UTC again.  (Local times
 # repeat for one hour when clocks go back in autumn; data logged across that change would overlap.)
 DISPLAY_TZ = os.environ.get("WF_DISPLAY_TZ", "America/Los_Angeles")
+LOCAL_TZ = DISPLAY_TZ          # the zone the sidebar "Time zone" switch calls local; DISPLAY_TZ follows the switch
+
+
+def _tz_word():
+    """'UTC' or 'local', for axis, column and slider labels."""
+    return 'UTC' if DISPLAY_TZ == 'UTC' else 'local'
 
 
 def _to_local(series):
@@ -166,7 +180,10 @@ cruise_select = pn.widgets.Select(name='Cruise ID', options=raw_cruises, value=d
 file_select = pn.widgets.Select(name='File / leg', options=_files_for(default_cruise), value="All files")
 var_select = pn.widgets.Select(name='Colour map by', options=list(VARS),
                                value=list(VARS)[0])
-time_slider = pn.widgets.DatetimeRangeSlider(name='Time range (local time)', start=_lo, end=_hi, value=(_lo, _hi))
+time_slider = pn.widgets.DatetimeRangeSlider(name=f'Time range ({_tz_word()} time)', start=_lo, end=_hi, value=(_lo, _hi))
+tz_select = pn.widgets.RadioButtonGroup(
+    name='Time zone', options={'Local ship time': LOCAL_TZ, 'UTC': 'UTC'} if LOCAL_TZ != 'UTC' else {'UTC': 'UTC'},
+    value=DISPLAY_TZ, button_type='default', button_style='outline')
 qc_checkbox = pn.widgets.Checkbox(name='Hide QC-flagged scans (spike / speed / bad T-S)', value=False)
 
 # Animation controls (shown in the Track Map tab).
@@ -222,8 +239,26 @@ def _on_file(event):
     time_slider.start, time_slider.end, time_slider.value = lo, hi, (lo, hi)
 
 
+def _on_tz(event):
+    """Switch every displayed time between local ship time and UTC; the time slider keeps the same instants."""
+    global DISPLAY_TZ
+
+    def convert(ts):
+        return pd.Timestamp(ts).tz_localize(event.old, ambiguous=False, nonexistent='shift_forward') \
+            .tz_convert(event.new).tz_localize(None).to_pydatetime()
+
+    start, end, (v0, v1) = convert(time_slider.start), convert(time_slider.end), map(convert, time_slider.value)
+    DISPLAY_TZ = event.new
+    try:
+        range_x.event(x_range=None)      # a zoom window set in the old zone no longer lines up
+    except Exception:
+        pass
+    time_slider.param.update(name=f'Time range ({_tz_word()} time)', start=start, end=end, value=(v0, v1))
+
+
 cruise_select.param.watch(_on_cruise, 'value')
 file_select.param.watch(_on_file, 'value')
+tz_select.param.watch(_on_tz, 'value')
 
 # 4. DATA LOGIC
 _WIDGETS = (cruise_select, file_select, time_slider, qc_checkbox)
@@ -258,6 +293,8 @@ _HIDDEN_COLS = ["ch0_counts", "ch1_counts", "ch2_counts"]   # raw counts stay in
 
 
 def _shown(df):
+    if DISPLAY_TZ == 'UTC' and LOCAL_TZ != 'UTC':       # time_utc already holds these times
+        df = df.drop(columns=['time_local'], errors='ignore')
     return df.drop(columns=[c for c in _HIDDEN_COLS if c in df.columns])
 
 
@@ -344,14 +381,29 @@ def _readout(frame, cruise, file_key, t_range, hide_qc, step_min, skip_gaps, tai
             f"{var_label}: {val_txt}{idle}")
 
 
-def _basemap_for(dfp):
-    """Esri Ocean for wide views; Esri imagery for a track small enough to need close-up tiles."""
-    if dfp.empty:
-        return gvts.EsriOceanBase * gvts.EsriOceanReference
-    span = max(float(dfp['lat'].max() - dfp['lat'].min()), float(dfp['lon'].max() - dfp['lon'].min()))
-    if span < CLOSEUP_SPAN_DEG:
-        return gvts.EsriImagery
-    return gvts.EsriOceanBase * gvts.EsriOceanReference
+def _limit_map_zoom(plot, element):
+    """Ocean Base has tiles only to about zoom 10 in many regions; stop there instead of showing blank tiles."""
+    for r in plot.state.renderers:
+        src = getattr(r, 'tile_source', None)
+        if src is not None:
+            src.max_zoom = MAP_MAX_ZOOM
+
+
+def _map_extent(dfp, width_px, height_px):
+    """Start view (xlim, ylim in Web Mercator metres): the whole track plus a margin, at least
+    MIN_MAP_SPAN_KM across, and with the same shape as the plot so the map is not stretched."""
+    r = 6378137.0
+    lon = dfp['lon'].to_numpy(float)
+    lat = dfp['lat'].to_numpy(float)
+    x = np.radians(lon) * r
+    y = np.log(np.tan(np.pi / 4 + np.radians(lat) / 2)) * r
+    half_min = MIN_MAP_SPAN_KM * 500.0 / np.cos(np.radians(lat.mean()))        # Mercator metres for half the span
+    cx, cy = (x.min() + x.max()) / 2, (y.min() + y.max()) / 2
+    hx, hy = max((x.max() - x.min()) * 0.6, half_min), max((y.max() - y.min()) * 0.6, half_min)
+    aspect = max(width_px - 180, 100) / max(height_px - 110, 100)             # plot area: minus colour bar, axes, title
+    hx = max(hx, hy * aspect)
+    hy = hx / aspect
+    return (cx - hx, cx + hx), (cy - hy, cy + hy)
 
 
 # 5. TAB FUNCTIONS
@@ -375,9 +427,13 @@ def view_map(cruise, file_key, t_range, hide_qc, var_label, animate, step_min, s
         return pn.pane.Alert("No data for the current selection.")
     col = VARS[var_label]
     dfp = _decimate(df)[['lon', 'lat', col, 'time_local', 'file_key']].dropna(subset=['lon', 'lat'])
+    if dfp.empty:
+        return pn.pane.Alert("No positions for the current selection.")
     vals = dfp[col].dropna()
     clim = (float(vals.quantile(0.02)), float(vals.quantile(0.98))) if len(vals) else (0, 1)
-    tiles = _basemap_for(dfp)
+    tiles = gvts.EsriOceanBase * gvts.EsriOceanReference
+    map_h = MAP_BIG_HEIGHT if big else (620 if animate else 650)
+    xlim, ylim = _map_extent(dfp, map_w, map_h)
 
     if animate:
         context = gv.Points(dfp[['lon', 'lat']], ['lon', 'lat'], crs=ccrs.PlateCarree()).opts(
@@ -404,8 +460,8 @@ def view_map(cruise, file_key, t_range, hide_qc, var_label, animate, step_min, s
 
         stream = hv.streams.Params(player, ['value'], rename={'value': 'frame'})
         layers = tiles * context * hv.DynamicMap(frame_layers, streams=[stream])
-        return layers.opts(width=map_w, height=MAP_BIG_HEIGHT if big else 620, title=f"Cruise timeline - {var_label}",
-                           hooks=[_white_background])
+        return layers.opts(width=map_w, height=map_h, title=f"Cruise timeline - {var_label}",
+                           xlim=xlim, ylim=ylim, hooks=[_white_background, _limit_map_zoom])
 
     track = gv.Points(dfp, ['lon', 'lat'], vdims=[col, 'time_local', 'file_key'], crs=ccrs.PlateCarree()).opts(
         color=col, cmap='Viridis', clim=clim, colorbar=True, size=4, alpha=0.8, tools=['hover'],
@@ -424,8 +480,8 @@ def view_map(cruise, file_key, t_range, hide_qc, var_label, animate, step_min, s
             color='red', size=6, alpha=0.9)
 
     layers = layers * hv.DynamicMap(highlight, streams=[range_x])
-    return layers.opts(width=map_w, height=MAP_BIG_HEIGHT if big else 650, title=f"Track - {var_label}",
-                       hooks=[_white_background])
+    return layers.opts(width=map_w, height=map_h, title=f"Track - {var_label}",
+                       xlim=xlim, ylim=ylim, hooks=[_white_background, _limit_map_zoom])
 
 
 readout = pn.pane.Markdown(pn.bind(_readout, player.param.value, cruise_select, file_select, time_slider,
@@ -639,7 +695,7 @@ def view_multi_axis(cruise, file_key, t_range, hide_qc, x_mode, fit, chosen):
         xcol, xlabel, eps = 'elapsed_min', 'Time, Elapsed [minutes]', 1 / 60
         dfp[xcol] = (dfp['time_local'] - dfp['time_local'].iloc[0]).dt.total_seconds() / 60
     else:
-        xcol, xlabel, eps = 'time_local', 'Time (local)', pd.Timedelta(seconds=1)
+        xcol, xlabel, eps = 'time_local', f'Time ({"UTC" if _tz_word() == "UTC" else "local"})', pd.Timedelta(seconds=1)
     gaps = dfp['time_local'].diff() > pd.Timedelta(minutes=MULTI_AXIS_GAP_MIN)
     if gaps.any():                          # a NaN row before each gap stops the line bridging it
         brk = dfp[gaps].copy()
@@ -661,7 +717,7 @@ _SUMMARY_EXTRA = [("temp_c", "Median temp (°C)", 2), ("sal_psu", "Median salini
                   ("fluor_mgm3", "Median fluor. (mg/m³)", 2)]
 
 
-def _file_summary_impl(target_cruise):
+def _file_summary_impl(target_cruise, tz=None):
     # Medians of the converted variables, ignoring QC-flagged scans (NULL if no .cnv).
     extra = "".join(
         f',\n        ROUND(MEDIAN(CASE WHEN (qc_flag & {QC_BAD_MASK}) = 0 THEN {col} END), {nd}) AS "{label}"'
@@ -679,7 +735,8 @@ def _file_summary_impl(target_cruise):
     df_sum = con.execute(query, (target_cruise,)).df()
     for col in ("Start (UTC)", "End (UTC)"):
         df_sum[col] = _to_local(df_sum[col])
-    df_sum = df_sum.rename(columns={"Start (UTC)": "Start (local)", "End (UTC)": "End (local)"})
+    w = _tz_word()
+    df_sum = df_sum.rename(columns={"Start (UTC)": f"Start ({w})", "End (UTC)": f"End ({w})"})
     config = {'columns': [{'field': 'Health %', 'formatter': 'progress',
                            'formatterParams': {'color': '#28a745', 'legend': True}}]}
     table = pn.widgets.Tabulator(df_sum, theme='midnight', show_index=False, sizing_mode='stretch_both',
@@ -687,10 +744,10 @@ def _file_summary_impl(target_cruise):
     return pn.Column("# File Summary", table, sizing_mode='stretch_both')
 
 
-view_file_summary = pn.Column(pn.bind(_file_summary_impl, cruise_select), sizing_mode='stretch_both')
+view_file_summary = pn.Column(pn.bind(_file_summary_impl, cruise_select, tz_select), sizing_mode='stretch_both')
 
 
-def _tabular_impl(cruise, file_key, t_range, hide_qc):
+def _tabular_impl(cruise, file_key, t_range, hide_qc, tz=None):
     df = get_df(cruise, file_key, t_range, hide_qc)
     if df.empty:
         return pn.pane.Alert("No data for the current selection.")
@@ -699,7 +756,7 @@ def _tabular_impl(cruise, file_key, t_range, hide_qc):
 
 
 view_tabular_data = pn.Column(
-    pn.bind(_tabular_impl, cruise_select, file_select, time_slider, qc_checkbox),
+    pn.bind(_tabular_impl, cruise_select, file_select, time_slider, qc_checkbox, tz_select),
     sizing_mode='stretch_both')
 
 # 6. ASSEMBLY
@@ -711,8 +768,9 @@ tabs = pn.Tabs(
     dynamic=True, active=0)
 
 dashboard = pn.template.FastListTemplate(
-    title="Western Flyer - Flow-through (SBE 21)",
-    sidebar=[notice, cruise_select, file_select, var_select, time_slider, qc_checkbox,
+    title="R/V Western Flyer - Flow-through (SBE 21)",
+    sidebar=[notice, cruise_select, file_select, var_select, pn.pane.Markdown('**Time zone**', margin=(5, 10, 0, 10)),
+             tz_select, time_slider, qc_checkbox,
              pn.pane.Markdown("---"), csv_button],
     main=[tabs], accent_base_color="#00f2ff", header_background="#1a1a1a")
 

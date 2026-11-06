@@ -28,31 +28,31 @@ To avoid Windows permission issues, place the root folder inside your Windows us
 
 ## Python Installation Requirements
 
-This project requires **Python 3.12**.
+This project requires **Python 3.13**.
 
 ### Windows
 When installing, the installer will ask: "Add Python to PATH?" **Select NO.**
 
-* **Typical path:** `C:\Users\<your_username>\AppData\Local\Programs\Python\Python312\`
+* **Typical path:** `C:\Users\<your_username>\AppData\Local\Programs\Python\Python313\`
 
 ### macOS (Homebrew)
-    brew install python@3.12
+    brew install python@3.13
 
 ### Linux (Ubuntu / Debian) using apt install
     sudo add-apt-repository ppa:deadsnakes/ppa
     sudo apt update
-    sudo apt install python3.12 python3.12-venv
+    sudo apt install python3.13 python3.13-venv
 
 ### Linux (Ubuntu / Debian) using pyenv
 
-This has the advantage of not requiring root privileges, and it does not install Python 3.12 system wide.
+This has the advantage of not requiring root privileges, and it does not install Python 3.13 system wide.
 
     # Install pyenv:
     curl -fsSL https://pyenv.run | bash
-    # Install Python 3.12:
-    pyenv install 3.12
-    # Set Python 3.12 as the global default:
-    pyenv global 3.12
+    # Install Python 3.13:
+    pyenv install 3.13
+    # Set Python 3.13 as the global default:
+    pyenv global 3.13
 
 ## Project Structure
 
@@ -139,14 +139,14 @@ This has the advantage of not requiring root privileges, and it does not install
 
 **Git** must be installed to download the software from GitHub (`git clone`). Download it from [git-scm.com](https://git-scm.com/downloads) and confirm with `git --version`.
 
-Python 3.12 is required (see above). The dashboard and pipeline dependencies are declared in `pyproject.toml` and installed from PyPI when you run `pip install -e .`. The SBE 21 is not supported by the Sea-Bird Scientific Python toolkit, so that toolkit is not used here.
+Python 3.13 is required (see above). The dashboard and pipeline dependencies are declared in `pyproject.toml` and installed from PyPI when you run `pip install -e .`. The SBE 21 is not supported by the Sea-Bird Scientific Python toolkit, so that toolkit is not used here.
 
 ## Getting Started
 
     git clone https://github.com/joeacarlisle/westernflyer_cruise_flowthru.git
     cd westernflyer_cruise_flowthru
 
-Then follow the **Prerequisites** and **Setup** sections to install Python 3.12 and the project dependencies.
+Then follow the **Prerequisites** and **Setup** sections to install Python 3.13 and the project dependencies.
 
 ## Setup: Virtual Environment and Installation
 
@@ -154,13 +154,13 @@ Then follow the **Prerequisites** and **Setup** sections to install Python 3.12 
 
 ### Windows (Command Prompt)
 
-    "C:\Users\<your_username>\AppData\Local\Programs\Python\Python312\python.exe" -m venv .venv
+    "C:\Users\<your_username>\AppData\Local\Programs\Python\Python313\python.exe" -m venv .venv
     .venv\Scripts\activate
     python -m pip install -e .
 
 ### macOS / Linux
 
-    python3.12 -m venv .venv
+    python3.13 -m venv .venv
     source .venv/bin/activate
     python -m pip install -e .
 
@@ -259,7 +259,8 @@ Tabs: Track Map (map on the left, time series on the right), Multi-Axis Profile 
 * Trail: whole cruise so far, or only the last 6 h / 24 h / 3 days. A faint grey line shows the full track.
 * Skip gaps (default on): playback jumps to the next frame that has data, so the idle periods between logging sessions are skipped. Turn it off to play in true cruise time; empty frames then show "no data in this interval".
 * A red marker shows the ship; the readout above the map gives local time, position, speed and the colour variable.
-* The dashboard shows local ship time (Pacific, `America/Los_Angeles`) on the time slider, time axes, animation readout, File Summary and Data Table. The database stays in UTC, and the CSV export carries both `time_utc` and `time_local` columns. Set `WF_DISPLAY_TZ=UTC` to show UTC instead.
+* The basemap is Esri Ocean Base with place labels, which shows seafloor relief (needs internet). Zoom stops at level 10, the finest level at which Ocean Base has tiles in most regions.
+* The dashboard shows local ship time (Pacific, `America/Los_Angeles`) on the time slider, time axes, animation readout, File Summary and Data Table. The database stays in UTC, and the CSV export carries both `time_utc` and `time_local` columns. The **Time zone** switch in the sidebar changes all of these between local ship time and UTC (the time slider keeps the same instants). `WF_DISPLAY_TZ=UTC` makes UTC the only choice. In UTC mode the Data Table and CSV export omit the duplicate `time_local` column.
 * The time-series panels beside the map show the full cruise, and a red cursor line follows the same timeline.
 * With animation off, a red highlight shows the window zoomed on the time-series panels.
 
@@ -310,6 +311,10 @@ Plot downloads (the Bokeh toolbar Save button) export with an opaque white backg
 | 16  | Converted salinity or temperature out of range, usually the cell not flowing seawater        |
 
 Scans are flagged, never removed.
+
+## Dashboard stops responding
+
+The dashboard stops responding after 15 minutes of inactivity and needs to be refreshed (press F5 or reload the page). For Windows this is the browser's sleeping-tabs setting: Edge puts a tab that has been inactive for 15 minutes to sleep, which cuts its link to the dashboard server. To stop it, add the dashboard address to Settings > System and performance > Performance > "Always keep these sites active" (for example `localhost`), or turn off "Automatically put tabs to sleep".
 
 ## Contact
 

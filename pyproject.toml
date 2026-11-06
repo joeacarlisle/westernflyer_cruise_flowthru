@@ -3,13 +3,13 @@ name = "wf-flowthru"
 version = "0.1.0"
 description = "Western Flyer flow-through (SBE 21 thermosalinograph) raw hex to DuckDB"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.13,<3.14"
 authors = [
     {name = "Joe Carlisle", email = "joeacarlisle@gmail.com"},
 ]
 
 dependencies = [
-    # Exact versions, matching the westernflyer_cruise_ctd project's environment (Python 3.12.10).
+    # Exact versions, matching the westernflyer_cruise_ctd project's environment.
     "duckdb==1.5.4",
     "numpy==2.5.0",
     "pandas==3.0.3",
