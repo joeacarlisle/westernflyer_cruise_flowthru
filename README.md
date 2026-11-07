@@ -314,7 +314,7 @@ Scans are flagged, never removed.
 
 ## Dashboard stops responding
 
-The dashboard stops responding after 15 minutes of inactivity and needs to be refreshed (press F5 or reload the page). For Windows this is the browser's sleeping-tabs setting: Edge puts a tab that has been inactive for 15 minutes to sleep, which cuts its link to the dashboard server. To stop it, add the dashboard address to Settings > System and performance > Performance > "Always keep these sites active" (for example `localhost`), or turn off "Automatically put tabs to sleep".
+The dashboard stops responding after a period of inactivity and needs to be refreshed (press F5 or reload the page). This is the browser's tab-sleeping setting, on Windows and on Mac: Edge puts an inactive tab to sleep (15 minutes on the Windows machine this was tested on; the time is configurable), and Chrome's Memory Saver can do the same. Either one cuts the tab's link to the dashboard server. In Edge, add the dashboard address to Settings > System and performance > Performance > "Always keep these sites active" (for example `localhost`), or turn off "Automatically put tabs to sleep". In Chrome, use Settings > Performance > "Always keep these sites active", or turn off Memory Saver.
 
 ## Contact
 
