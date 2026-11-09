@@ -10,7 +10,7 @@ The Western Flyer flow-through codebase is a modular processing pipeline for the
 * **No .hex or .xmlcon needed:** `.hex` and `.xmlcon` files in a cruise folder are ignored. The build runs when they are absent. Sensor serial numbers and calibration dates, and a SHA-256 fingerprint of the sensor-configuration XML embedded in each `.cnv` header, are recorded instead.
 * **Modular Cruise Architecture:** Each cruise is isolated under `cruises/<cruise_id>/`. Adding a new cruise requires only a directory with the `.cnv` files (in `cnv/` or the cruise folder) and, optionally, a `config.toml`; the directory name is the cruise ID.
 * **Derived values:** Ship speed (`speed_ms`) is computed from the `.cnv` latitude/longitude and time. A `.cnv` carries no depth, so `depth_m` is empty and the dashboard hides it.
-* **Automated QC Flagging:** Scans are flagged, never removed. A `qc_flag` bitmask marks spikes, implausible ship speed, missing NMEA depth, a first scan far from the header position, and implausible converted salinity or temperature (cell not flowing seawater).
+* **Automated QC Flagging:** Scans are flagged, never removed. A `qc_flag` bitmask marks spikes, implausible ship speed, a first scan far from the header position, and implausible converted salinity or temperature (cell not flowing seawater).
 * **Atomic, Idempotent Storage:** Processed data is managed via DuckDB. Per-cruise records are replaced atomically inside a single transaction. A `build_metadata` table records build provenance, and a `flowthru_cnv` table records each `.cnv` (name, SHA-256, rows matched, status).
 * **Per-Build Audit Logging:** Each invocation writes a fresh, timestamped log file (`logs/wf_flowthru_build_<cruise>_<timestamp>.log`).
 * **Interactive Dashboard Suite:** A built-in visualization suite powered by the HoloViz ecosystem (Panel, HoloViews, Bokeh, GeoViews) renders an animated track map with stacked time series, a file summary, and a data table with CSV export. Plot downloads export with an opaque white background.
@@ -31,9 +31,15 @@ To avoid Windows permission issues, place the root folder inside your Windows us
 This project requires **Python 3.13**.
 
 ### Windows
-When installing, the installer will ask: "Add Python to PATH?" **Select NO.**
 
-* **Typical path:** `C:\Users\<your_username>\AppData\Local\Programs\Python\Python313\`
+Install Python 3.13 from python.org (not from the Microsoft Store, which puts it in a different folder than the instructions below assume).
+
+1. If you installed Python 3.13 from the Microsoft Store, remove it first: Windows Settings, Apps, "Python 3.13", Uninstall.
+2. Download the "Windows installer (64-bit)" for Python 3.13 from https://www.python.org/downloads/windows/.
+3. Run it and choose **Install Now**. Leave **"Install for all users"** unticked, so it installs for your user only. Leave the **py launcher** ticked.
+4. When the installer asks to **"Add python.exe to PATH"**, select **No** (leave it unticked).
+5. Python installs to `C:\Users\<your_username>\AppData\Local\Programs\Python\Python313\`.
+6. Check it in Command Prompt: `py -0p` should list `Python313` under `AppData\Local\Programs\Python`.
 
 ### macOS (Homebrew)
     brew install python@3.13
@@ -63,6 +69,8 @@ This has the advantage of not requiring root privileges, and it does not install
     |   main.py
     |   sbe21_ingestion.py
     |   pyproject.toml
+    +---docs
+    |       sbe21_hex_format.md      notes on the raw .hex format (historical)
     +---cruises
     |   +---2025_Baja
     |   |   |   config.toml                                       time source and QC limits
@@ -128,7 +136,7 @@ This has the advantage of not requiring root privileges, and it does not install
 ## File Descriptions
 
 * **main.py** — Orchestrator. Parses CLI args, loads the optional `config.toml`, finds the `.cnv` files, runs the per-file pipeline, writes the DuckDB atomically, and stamps build provenance.
-* **sbe21_ingestion.py** — `.cnv` reader (`ingest_sbe21_cnv`). Parses the `.cnv` header and data rows, builds timestamps, derives ship speed, and sets QC flags. The older `.hex` / `.xmlcon` reader functions remain in the module for reference but are not called.
+* **sbe21_ingestion.py** — `.cnv` reader (`ingest_sbe21_cnv`). Parses the `.cnv` header and data rows, builds timestamps, derives ship speed, and sets QC flags.
 * **flowthru_holoviews.py** — Read-only Panel dashboard. Reactive widgets update all tabs when the cruise or file selection changes.
 * **pyproject.toml** — Package definition. Enables `pip install -e .` to install the project and all dependencies in one step.
 * **config.toml** — Processing constants per cruise (time source, QC limits). See schema below.
@@ -304,9 +312,9 @@ Plot downloads (the Bokeh toolbar Save button) export with an opaque white backg
 
 | Bit | Meaning                                                                                      |
 |-----|----------------------------------------------------------------------------------------------|
-| 1   | Spike (converted temperature / salinity jump from the running median, or raw-count test)     |
+| 1   | Spike (converted temperature / salinity jump from the running median)                        |
 | 2   | Implausible ship speed                                                                       |
-| 4   | No NMEA depth (informational)                                                                |
+| 4   | Unused (reserved)                                                                            |
 | 8   | First scan far from header position                                                          |
 | 16  | Converted salinity or temperature out of range, usually the cell not flowing seawater        |
 
