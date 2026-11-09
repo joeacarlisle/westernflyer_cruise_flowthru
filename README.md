@@ -142,6 +142,7 @@ This has the advantage of not requiring root privileges, and it does not install
 * **config.toml** — Processing constants per cruise (time source, QC limits). See schema below.
 * **.cnv** — SBE Data Processing output and the only data source. Supplies time, position and the converted variables.
 * **.hex / .xmlcon** — Not read by the pipeline. They are only needed upstream, by SBE Data Processing, to create the `.cnv` files.
+* **[docs/sbe21_hex_format.md](docs/sbe21_hex_format.md)** — Historical notes on the raw `.hex` scan format, from when the pipeline read `.hex` files. Not needed to run the pipeline.
 
 ## Prerequisites
 
